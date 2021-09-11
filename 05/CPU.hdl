@@ -1,0 +1,78 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in 
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in outM, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM==0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time step. If reset==1 then the 
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+    // Handle A register
+    And(a=instruction[15], b=true, out=cInst);
+    Not(in=cInst, out=aInst);
+    And(a=cInst, b=instruction[5], out=destA);
+    // if instruction[15] == 1 or is a C instruction and instruction[5] == 1, load value into ARegister
+    Or(a=destA, b=aInst, out=loadAreg);
+    // decide which value to load into AReg. For example, if A=D in hack language, the ALU output should be loaded.
+    // We can decide it based on the opcode of the instruction, which is instruction[15]
+    Mux16(a=instruction, b=aluOut, sel=instruction[15], out=toFeedAReg);
+    ARegister(in=toFeedAReg, load=loadAreg, out=aRegOut, out[0..14]=addressM);
+
+    // Handle D register (Eg.: D=M)
+    And(a=instruction[4], b=cInst, out=shouldLoadDReg);
+    DRegister(in=aluOut, load=shouldLoadDReg, out=dRegOut);
+
+    // Handle ALU
+    // if instruction[12] use aRegOut else inM from the y input of the ALU
+    Mux16(a=aRegOut, b=inM, sel=instruction[12], out=aluY);
+    ALU(x=dRegOut, y=aluY, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=aluOut, zr=outIsZero, ng=outIsNeg, out=outM);
+
+    // Handle PC.
+    Not(in=outIsNeg, out=notNeg);
+    Not(in=outIsZero, out=notZero);
+    // if aluOut is neither negative nor zero, it must be positive. It will come in handy for testing jump conditions
+    And(a=notNeg, b=notZero, out=outIsPos);
+    And(a=outIsPos, b=instruction[0], out=shouldJmpGt);
+    And(a=outIsZero, b=instruction[1], out=shouldJmpZr);
+    And(a=outIsNeg, b=instruction[2], out=shouldJmpNg);
+    Or(a=shouldJmpGt, b=shouldJmpZr, out=orJump);
+    // if any of the jump conditions is met, we should load a new value in the PC
+    Or(a=orJump, b=shouldJmpNg, out=shouldJumpa);
+    And(a=shouldJumpa, b=cInst, out=shouldJump);
+    PC(in=aRegOut, load=shouldJump, inc=true, reset=reset, out[0..14]=pc);
+
+    // Handle M write. Eg M=D, which means that the value should be stored in memory
+    And(a=cInst, b=instruction[3], out=writeM);
+}
